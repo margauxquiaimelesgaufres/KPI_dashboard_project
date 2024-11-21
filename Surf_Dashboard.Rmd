@@ -1,0 +1,334 @@
+---
+title: "Surf dashboard"
+author: "Data Team"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    social: menu
+    source_code: embed
+    theme: cosmo  # A more modern theme for a sleek look
+    highlight: zenburn  # Code highlighting for better readability
+    
+---
+
+
+
+```{r setup, include=FALSE}
+# Load necessary libraries
+
+library(reticulate)
+library(readr)
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(ggplot2)
+library(hms)
+library(kableExtra) # To Create and customize tables in a visually appealing way
+library(flexdashboard)
+library(htmltools) # To Create the text box
+
+# Set the working directory for the entire R Markdown document (Suggestion: put the path you saved the CSV file at)
+knitr::opts_knit$set(root.dir = "C:/Users/baekh/Desktop/Cours_Prog/BigData_otherApplications-main/BigData_otherApplications-main")
+
+
+```
+
+
+```{python}
+#  -- Section 1: Run the Python script --
+# Import necessary libraries
+import subprocess
+# Run the Python script
+subprocess.run(["python", "scrapping.py"])
+```
+
+```{r}
+# -- Section 2: Import the dataset just saved after the script run --
+
+data <- read.csv("Data.csv")
+
+# Remove the day name and add the year 2024 to the Date column
+data$Date <- sub("^\\w+\\s", "", data$Date)  
+data$Date <- paste(data$Date, "2024")        
+
+# Convert the Date column to Date format
+data$Date <- dmy(data$Date)
+
+# Combine Date and Hour into a datetime column (POSIXct format)
+data <- data %>%
+  mutate(
+    datetime = as.POSIXct(paste(Date, Hour), format = "%Y-%m-%d %H:%M")
+  )
+
+# Create new columns min_wave, max_wave and Mean_WS
+data <- data %>%
+  mutate(min_wave = as.numeric(sub(" - .*", "", Waves_Size)),
+         max_wave = as.numeric(sub(".* - ", "", Waves_Size))) %>%
+  mutate(Mean_WS = round((min_wave + max_wave) / 2, digits = 1)) 
+
+```
+
+
+KPIs
+=======================================================================
+
+Row {data-height=400}
+-----------------------------------------------------------------------
+
+
+### <span style="font-size: 22px; color: #1a75ff;">Best Moments to Surf</span>
+
+```{r}
+# KPI 4:
+# --- Box best moment to practice: ---
+# Filter data for optimal conditions (wave size up to 1 m, wind speed up to 50 km/h, and wind direction contains "Nord")
+optimal_conditions <- data %>%
+  filter(
+    Mean_WS <= 1.0,  
+    Wind_Speed <= 50,
+    grepl("Nord", Wind_Direction, ignore.case = TRUE)
+  ) %>%
+  select(Date, Hour, Wind_Speed, Mean_WS, Wind_Direction) %>% # Select relevant columns
+  arrange(Date, Hour)  # Sort by Date and Hour
+
+# Summarize the best moments for each day (combine hours with optimal conditions)
+best_moments_summary <- optimal_conditions %>%
+  group_by(Date) %>%
+  summarise(
+    Hours = paste(unique(Hour), collapse = ", "),        # Combine all matching hours
+    Avg_Wind_Speed = round(mean(Wind_Speed), 1),         # Average wind speed
+    Avg_Wave_Size = round(mean(Mean_WS), 1)              # Average wave size
+  ) %>%
+  ungroup()
+
+# Format the date to display it in French format (e.g., "Samedi 16 novembre 2024")
+best_moments_summary <- best_moments_summary %>%
+  mutate(Date = format(as.Date(Date), "%A %d %B %Y") %>% 
+              tools::toTitleCase())  # Capitalize the first letter in Date
+
+
+# Create a box for the best moments of the week (optimal surf conditions)
+surf_box_content <- lapply(1:nrow(best_moments_summary), function(i) {
+  # Create each surf moment content for each day
+  div(
+    style = "background-color: #e6e5f7; color: black; padding: 15px; margin-bottom: 10px; border-radius: 8px;",
+    h3(best_moments_summary$Date[i], style = "color: #1a75ff; font-size: 22px;"), # Title in purple and front-size 15px
+    p(paste("Best hours to surf: ", best_moments_summary$Hours[i])), # Best hours
+    p(paste("Average wind speed: ", best_moments_summary$Avg_Wind_Speed[i], "km/h")), # Average wind speed
+    p(paste("Average wave size: ", best_moments_summary$Avg_Wave_Size[i], "m")) # Average wave size
+  )
+})
+
+# Combine all the individual boxes into one
+surf_box <- do.call(tagList, surf_box_content)
+
+# Display the Box
+surf_box
+
+
+```
+
+### <span style="font-size: 22px; color: #1a75ff;">Sea Quality Radar</span>
+
+```{r}
+# KPI 6 :
+# --- A gauge containing a grade of the sea quality for the best moment to practice ---
+# For this last KPI, you can create your own scale.
+
+# Create new scales for the sea quality factors
+data <- data %>%
+    mutate(
+      # Assign scores for each factor
+      wave_score = ifelse(Waves_Size <= 1.0, 40, ifelse(Waves_Size <= 1.5, 20, 0)),
+      wind_score = ifelse(Wind_Speed <= 50, 30, ifelse(Wind_Speed <= 60, 15, 0)),
+      direction_score = ifelse(grepl("Nord", Wind_Direction, ignore.case = TRUE), 30, 0),
+      
+      # Total sea quality score (out of 100)
+      sea_quality_score = wave_score + wind_score + direction_score)
+
+# Grade the sea quality for the best moment to practice (sea_quality)
+sea_quality <- max(data$sea_quality_score, na.rm = TRUE)
+View(sea_quality)
+
+# Ensure sea_quality is valid
+if (!is.numeric(sea_quality) || is.na(sea_quality)) {
+  sea_quality <- 0
+}
+
+# Display a gauge for sea quality
+if (is.numeric(sea_quality) && is.finite(sea_quality)) {
+  gauge_label <- ifelse(
+    sea_quality >= 70, "Excellent",
+    ifelse(sea_quality >= 40, "Moderate", "Poor")
+  )
+  
+  # Display the gauge with dynamic labeling and sectors with different colors
+  gauge(
+    sea_quality, 
+    min = 0, 
+    max = 100, 
+    gaugeSectors(
+      success = c(70, 100), 
+      warning = c(40, 69), 
+      danger = c(0, 39),
+      colors = c("#1f77b4", "#1f78b4", "#a6cee3")
+    ), 
+    label = paste("Sea Quality:", gauge_label) # Dynamic label
+  )
+} else {
+  # Print a message for invalid sea_quality
+  message("Invalid 'sea_quality' value. Please provide a numeric and finite value.")
+}
+
+```
+
+### <span style="font-size: 22px; color: #1a75ff;">&nbsp;</span>
+
+```{r}
+# KPI 5:
+# --- A box plot containing the highest wave of the week ---
+# Find the highest wave of the week
+highest_wave <- data %>%
+  filter(max_wave == max(max_wave, na.rm = TRUE)) %>%  # Find the row with the highest wave
+  slice(1)  # In case of ties, select the first occurrence
+
+# Extract relevant details for the highest wave
+highest_wave_summary <- highest_wave %>%
+  select(Date, Hour, Wind_Speed, max_wave, Wind_Direction) %>%
+  rename(
+    `Date` = Date,
+    `Time` = Hour,
+    `Wind Speed (km/h)` = Wind_Speed,
+    `Wave Height (m)` = max_wave,
+    `Wind Direction` = Wind_Direction
+  ) %>%
+  mutate(
+    # Format the Date column to display in French format (e.g., "Samedi 16 novembre 2024")
+    Date = format(as.Date(Date), "%A %d %B %Y")
+  )
+
+# Create a box for the highest wave of the week
+highest_wave_box <- div(
+  style = "background-color: #e6e5f7; color: black; padding: 15px; margin-bottom: 15px; border-radius: 8px;",
+  h3("Highest Wave of the Week", style = "color: #1a75ff; font-size: 22px;"),  # Title in blue color
+  p(paste("Date: ", highest_wave_summary$Date[1])),  # Display date
+  p(paste("Time: ", highest_wave_summary$Time[1])),  # Display time
+  p(paste("Wave height: ", highest_wave_summary$`Wave Height (m)`[1], "m")),  # Display wave height
+)
+
+# Display the box with the highest wave information
+highest_wave_box
+
+
+```
+
+Row {data-height=700}
+-----------------------------------------------------------------------
+
+### <span style="font-size: 22px; color: #1a75ff;">Wave Size Over the Week</span>
+
+```{r}
+# KPI 1:
+# --- Plot wave size (the mean) over time ---
+ggplot(data, aes(x = datetime, y = Mean_WS, 
+                 group = interaction(as.POSIXct(Date), Hour), color = as.factor(Hour))) + # Match the color of the points with the Hour variable
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) + # Center plot title
+  scale_x_datetime(date_labels = "%d-%m", date_breaks = "1 day") + # Show only the day and month values on x-axis
+  labs(x = "Date and Time",
+       y = "Wave Size (meters)",
+       color = "Time of Day")
+```
+
+
+### <span style="font-size: 22px; color: #1a75ff;">Wind Speed Over the Week</span>
+
+```{r}
+# KPI 2:
+# --- Plot wind speed over time ---
+# Extract unique dates and convert them to POSIXct
+unique_dates <- as.POSIXct(unique(as.Date(data$datetime)), tz = attr(data$datetime, "tzone"))
+
+#Plot the wind speed over time (a Lollipop chart with conditional color):
+# Create a new column (Wind_Speed_Degree) to set the color depending on the wind speed
+data <- data %>% 
+  mutate(Wind_Speed_Degree = case_when(
+    Wind_Speed < 10 ~ "Low",                # Wind speed less than 10 km/h
+    Wind_Speed >= 10 & Wind_Speed < 20 ~ "Medium",  # Wind speed between 10 and 20 km/h
+    Wind_Speed >= 20 & Wind_Speed < 30 ~ "High",  # Wind speed between 20 and 30 km/h
+    Wind_Speed >= 30 ~ "Very high"                 # Wind speed 30 and above km/h
+  ))
+
+# Define custom colors for each wind speed category
+custom_colors <- c("Low" = "#a6cee3",  # Light Blue
+                   "Medium" = "#1f78b4",  # Sky Blue
+                   "High" = "#6a3d9a",  # Medium Blue
+                   "Very high" = "#08306b")  # Dark Blue
+
+# Plot wind speed over time
+ggplot(data, aes(x = datetime, y = Wind_Speed)) +
+  geom_segment(aes(x = datetime, xend = datetime, y = 0, yend = Wind_Speed, color = Wind_Speed_Degree), 
+               size = 1.3, alpha = 0.9) +
+  # Add a grey line across wind speed data
+  geom_line(aes(x = datetime, y = Wind_Speed, color="grey"))+
+  theme_light() +
+  scale_color_manual(values = custom_colors) +  # Apply custom colors
+  scale_x_datetime(date_labels = "%Hh", date_breaks = "8 hours") +  # Show only hours
+  # Add vertical lines to separate each day
+  geom_vline(xintercept = as.numeric(unique(as.POSIXct(data$Date))), 
+             linetype = "dashed", color = "grey") +
+  # Label each vertical line with the date
+  annotate("text", x = unique_dates, y = -0.001 * max(data$Wind_Speed),  # Position date labels below x-axis
+           label = format(unique_dates, "%m-%d"), angle = 0, hjust = 0.5, vjust = 1.5, size = 3) +
+  theme(
+    legend.position = "bottom", # Position legend at the bottom
+    panel.border = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7, color="black"),  # Rotate x-axis labels
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  labs(
+    x = "Time (Grouped by Day)",
+    y = "Wind Speed (km/h)"
+  )
+
+
+```
+
+### <span style="font-size: 22px; color: #1a75ff;">Surf Report for the Week</span>
+
+```{r}
+# KPI 3:
+#---A table containing the day, the hour, wave size and direction---
+# Set locale to French for date formatting
+invisible(Sys.setlocale("LC_TIME", "fr_FR.UTF-8"))
+
+# Create a new table that contains the needed columns
+Sum_Data <- data %>%
+  select(
+    Date,
+    Hour,
+    Mean_WS,
+    Wind_Direction
+  ) %>%
+  mutate(
+    Date = format(as.Date(Date), "%a %d %b %Y")  # Format the date to French format
+  )
+
+# Format the table and apply customization
+Sum_Data %>%
+  kbl(format = "html", align = 'c') %>%
+  kable_styling(
+    full_width = FALSE, 
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+    position = "center",
+    html_font = "10px"
+  ) %>% 
+  column_spec(1, bold = TRUE, width = "15em", background = "#e6e5f7", color = "black") %>%  # Customize Date column
+  column_spec(2, width = "8em", background = "#e6e5f7", color = "black") %>%  # Customize Hour column
+  column_spec(3, width = "8em", background = "#e6e5f7", color = "black") %>%  # Customize Mean_WS column
+  column_spec(4, width = "5em", background = "#e6e5f7", color = "black") %>%  # Customize Wind_Direction
+  row_spec(0, background = "#bdb1eb", color = "black", bold = TRUE)  # Customize table header
+
+```
